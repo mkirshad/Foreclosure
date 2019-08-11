@@ -57,13 +57,13 @@ class ForclosureProgram(object):
         sql_insert_headers = """ insert into headers(id, header, is_source) values (1, 'TYPE', 1), (2, 'ATTORNEY', 1), (3, 'PLAINTIFF', 1), 
                                 (4, 'Sheriff’s #/Courts Case #', 1), (5, 'DEFENDANT', 1), (6, 'ADDRESS', 1), (7, 'PARCEL', 1), 
                                 (8, 'STATUS', 1), (9, 'PRINCIPAL', 1),
-                                (10, 'ZEstimate', 0), (11, 'ZIP',0), (12, 'ZLiving Area',0), (13, 'ZBed',0), (14, 'ZBath',0), (15, 'ZStatus',0)
+                                (10, 'Zillow_Estimate', 0), (11, 'ZIP',0), (12, 'ZLiving Area',0), (13, 'ZBed',0), (14, 'ZBath',0), (15, 'ZStatus',0)
                                 , (16, 'ZTime on zillow',0), 
                                 (17, 'ZSchool1 Name',0), (18, 'ZSchool1 Grade',0), (19, 'ZSchool1 Distance',0), (20, 'ZSchool1 Rating', 0),
                                 (21, 'ZSchool2 Name',0), (22, 'ZSchool2 Grade',0), (23, 'ZSchool2 Distance',0), (24, 'ZSchool2 Rating', 0),
                                 (25, 'ZPrice History', 0), (26, 'nccd_response',2), (27, 'NSubdivision',0), (28, 'NMunicipal Info',0), (29, 'NZoning',0),
                                 (30, 'NCounty Balance Due', 0), (31, 'NSchool Balance Due', 0), (32, 'NRecent Sales', 0),
-                                (33, 'parcel_id', 2), (34, 'zillow_response',2)
+                                (33, 'parcel_id', 2), (34, 'zillow_response',2),(35, 'Zillow_ZEstimate', 0)
                              """
         if(conn is not None):
             try:
@@ -80,6 +80,29 @@ class ForclosureProgram(object):
                     conn.commit()
             except Error as e:
                 print(e)
+
+    @staticmethod
+    def patch_db_schema(conn):
+        sql_insert_headers = """ insert into headers(id, header, is_source) 
+                                SELECT 35, 'Zillow_ZEstimate', 0 
+                                WHERE NOT EXISTS(SELECT 1 FROM headers WHERE id = 35)
+                             """
+        sql2 = """ UPDATE file_records set value = replace(value,'=','') WHERE header_id = 33
+                """
+        sql3 = """ UPDATE headers set header = 'Zillow_Estimate' WHERE id = 10
+                """
+                
+
+        if(conn is not None):
+            try:
+                c = conn.cursor()
+                c.execute(sql_insert_headers)
+                c.execute(sql2)
+                c.execute(sql3)
+                conn.commit()
+            except Error as e:
+                print(e)
+ 
     @staticmethod
     def create_file(conn, file):
         """create a new file entry and return id"""
@@ -133,6 +156,22 @@ class ForclosureProgram(object):
         c.execute("SELECT * FROM files where id = ?", (file_id,))
         row = c.fetchone()
         return (row)
+    
+    @staticmethod
+    def get_nccd_id(conn, parcel):
+        """
+        Get NCCD ID From Databbase
+        """
+        c = conn.cursor()
+        c.execute("""SELECT a.value FROM file_records a 
+        JOIN file_records b ON a.record_id = b.record_id and b.header_id = 7 and a.header_id = 33
+        where b.value = ?""", (parcel,))
+        row = c.fetchone()
+        if(row is None):
+            return None
+        else:
+            return (row[0])
+
     @staticmethod
     def get_header_id_by_name(conn, header):
         """ return header id by header of header """
@@ -331,45 +370,52 @@ class ForclosureProgram(object):
         r = requests.post(url=api_endpoint, data=json.dumps(data), headers={'Host': 'www.zillow.com', 'User-Agent':'PostmanRuntime/7.15.2', 'Content-Type':'application/json', 'Content-Length':'388','Postman-Token':'e06d0281-62b6-4254-90df-36896dd6cbaa'},)
         price_history_dataset = r.json()["data"]["property"]["priceHistory"]
         price_history_converted_dataset = []
-        for price_record in price_history_dataset:
-            price={}
-            price['date']=datetime.fromtimestamp((price_record['time']/1000)).strftime('%Y-%m-%d')
-            price['price']='$'+str(price_record['price'])
-            price['priceChangeRate']=str(round((price_record['priceChangeRate']*100),2))+'%'
-            price['event']=price_record['event']
-            price['source']=price_record['source']
-            price['buyerAgent']=price_record['buyerAgent']
-            price['sellerAgent']=price_record['sellerAgent']
-            price_history_converted_dataset.append(price)
+        if( len(price_history_dataset) > 0):
+            for price_record in price_history_dataset:
+                price={}
+                price['date']=datetime.fromtimestamp((price_record['time']/1000)).strftime('%Y-%m-%d')
+                price['price']='$'+str(price_record['price'])
+                price['priceChangeRate']=str(round((price_record['priceChangeRate']*100),2))+'%'
+                price['event']=price_record['event']
+                price['source']=price_record['source']
+                price['buyerAgent']=price_record['buyerAgent']
+                price['sellerAgent']=price_record['sellerAgent']
+                price_history_converted_dataset.append(price)
     
-        #Insert Price History
-        if(len(price_history_converted_dataset)>0):
-            file_record = (file_row_seq, file_id, 25, str(price_history_converted_dataset))
-            ForclosureProgram.create_file_record(conn, file_record)
+            #Insert Price History
+            if(len(price_history_converted_dataset)>0):
+                file_record = (file_row_seq, file_id, 25, str(price_history_converted_dataset))
+                ForclosureProgram.create_file_record(conn, file_record)
+        zestimate = r.json()["data"]["property"]["zestimate"]
+        file_record = (file_row_seq, file_id, 35, str(zestimate))
+        ForclosureProgram.create_file_record(conn, file_record)
+
     @staticmethod
     def get_info_from_nccd(conn, file_row_seq, file_id, parcel):
-        ForclosureProgram.v_dict_questions[parcel]=None
-        keep_lookup = True
-        counter = 0
-        while keep_lookup:
-            try:
-                answer = ForclosureProgram.v_dict_answers[parcel]
-                keep_lookup = False
-                time.sleep(2)
-            except:
-                keep_lookup = True
-                time.sleep(2)
-                counter = counter + 1
-                if(counter==(10 if file_row_seq==1 else 45)):
-                    print('')
-                    print('Open/Refresh "http://www3.nccde.org/parcel/search/default.aspx" in Chrome with CJS extension and JS Code')
+        parcel_id = ForclosureProgram.get_nccd_id(conn, parcel)
+        if(parcel_id is None or parcel_id == 'NA'):
+            ForclosureProgram.v_dict_questions[parcel]=None
+            keep_lookup = True
+            counter = 0
+            while keep_lookup:
+                try:
+                    answer = ForclosureProgram.v_dict_answers[parcel]
+                    parcel_id = answer[1]
+                    keep_lookup = False
+                    time.sleep(2)
+                except:
+                    keep_lookup = True
+                    time.sleep(2)
+                    counter = counter + 1
+                    if(counter==(10 if file_row_seq==1 else 45)):
+                        print('')
+                        print('Open/Refresh "http://www3.nccde.org/parcel/search/default.aspx" in Chrome with CJS extension and JS Code')
         #Return if no answers found else process answers
-        if(answer[1]!='NA'):
+        if(parcel_id!='NA' and parcel_id != '' and parcel_id is not None):
             #parcel_id
-            file_record = (file_row_seq, file_id, 33, answer[1])
+            file_record = (file_row_seq, file_id, 33, parcel_id)
             ForclosureProgram.create_file_record(conn, file_record)
-
-            url_nccd = 'http://www3.nccde.org/parcel/Details/Default.aspx?ParcelKey='+answer[1]
+            url_nccd = 'http://www3.nccde.org/parcel/Details/Default.aspx?ParcelKey='+parcel_id
             r = requests.get(url_nccd, headers={'Host': 'www3.nccde.org', 'User-Agent':'PostmanRuntime/7.15.2',
                                                 'Postman-Token':'67e7d762-6217-4a2d-8eb7-6d9f9de7a1d4'}, )
             content = r.text
@@ -408,7 +454,7 @@ class ForclosureProgram(object):
                 file_record = (file_row_seq, file_id, 31, val)
                 ForclosureProgram.create_file_record(conn, file_record)
             #Recent Sale
-            url_nccd = 'http://www3.nccde.org/parcel/RecentSales/Default.aspx?ParcelKey='+answer[1]
+            url_nccd = 'http://www3.nccde.org/parcel/RecentSales/Default.aspx?ParcelKey='+parcel_id
             r = requests.get(url_nccd, headers={'Host': 'www3.nccde.org', 'User-Agent':'PostmanRuntime/7.15.2',
                                                 'Postman-Token':'67e7d762-6217-4a2d-8eb7-6d9f9de7a1d4'}, )
             content = r.text
@@ -476,7 +522,7 @@ class ForclosureProgram(object):
         for file in os.listdir(directory):
             file_row_seq = 0
             filename = os.fsdecode(file)
-            if filename.endswith(".xlsx"): 
+            if filename.endswith(".xlsx") or filename.endswith(".xls"): 
                 print('Processing file: ' + filename )
                 file = (filename, str(datetime.now()))
                 file_id = ForclosureProgram.create_file(conn, file)
@@ -661,6 +707,7 @@ class ForclosureProgram(object):
         database = "D:\\Foreclosure\db\pythonsqlite.db"
         conn = ForclosureProgram.create_connection(database)
         ForclosureProgram.create_db_schema(conn)
+        ForclosureProgram.patch_db_schema(conn)
         ForclosureProgram.process_files(conn)
         conn.close()
         print('')

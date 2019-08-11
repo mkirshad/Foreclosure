@@ -88,8 +88,8 @@ function func()
 					window.location.href="../search/default.aspx";
 				}
 			};
-
-			parcel_id = (window.location.href.substr(-6));
+			str = window.location.href
+			parcel_id = str.indexOf(str.indexOf('=')+1,);
 			parcel = document.getElementById('ctl00_ctl00_ContentPlaceHolder1_ContentPlaceHolder1__Header').textContent.replace('Parcel # ','');
 			
 			setTimeout(function() {
@@ -97,7 +97,7 @@ function func()
 			}, 1000);
 			setInterval(function(){
 				location.reload();
-			}, 5000);
+			}, 60000);
 		}
 	}catch(err){
 		setTimeout(function() {
@@ -110,4 +110,4 @@ func();
 
 setTimeout(function() {
 			location.reload();
-}, 60000);
+}, 180000);
